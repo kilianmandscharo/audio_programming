@@ -1,0 +1,13 @@
+.{
+    .name = .audio_programming,
+    .version = "0.0.0",
+    .fingerprint = 0x3f43ba23c15d65b5, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.15.0-dev.1184+c41ac8f19",
+    .dependencies = .{
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
