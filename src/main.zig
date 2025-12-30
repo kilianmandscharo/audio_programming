@@ -19,6 +19,7 @@ const Note = struct {
     value: NoteValue,
     duration: Duration = .Quarter,
     octave: u8,
+    dotted: bool,
 
     fn getFrequency(self: *Note) f32 {
         const offset: u8 = switch (self.value) {
@@ -40,7 +41,8 @@ const Note = struct {
     }
 
     fn getBeats(self: @This()) f32 {
-        return switch (self.duration) {
+        const factor: f32 = if (self.dotted) 1.5 else 1.0;
+        const val: f32 = switch (self.duration) {
             .Whole => 4.0,
             .Half => 2.0,
             .Quarter => 1.0,
@@ -49,6 +51,7 @@ const Note = struct {
             .ThirtySecond => 1.0 / 8.0,
             .SixtyFourth => 1.0 / 16.0,
         };
+        return val * factor;
     }
 };
 
@@ -69,12 +72,14 @@ const MelodyBuilder = struct {
         value: NoteValue,
         duration: Duration,
         octave: u8,
+        dotted: bool,
     ) !void {
         const note = Note{
             .value = value,
             .duration = duration,
             .octave = octave,
             .start = self.position,
+            .dotted = dotted,
         };
         try self.notes.append(arena, note);
         self.position += note.getBeats();
@@ -95,7 +100,7 @@ pub fn main() !void {
     defer file.close();
 
     const bpm = 120;
-    const bars = 4;
+    const bars = 8;
     const beats = bars * 4;
     const duration: u32 = std.math.round(@as(f32, @floatFromInt(beats)) / @as(f32, @floatFromInt(bpm)) * 60);
     const secs_per_beat = @as(f32, @floatFromInt(duration)) / @as(f32, @floatFromInt(beats));
@@ -132,25 +137,44 @@ pub fn main() !void {
 
     var builder = MelodyBuilder.init();
 
-    try builder.add(allocator, .E, .Quarter, 5);
-    try builder.add(allocator, .B, .Eigth, 4);
-    try builder.add(allocator, .C, .Eigth, 5);
-    try builder.add(allocator, .D, .Quarter, 5);
-    try builder.add(allocator, .C, .Eigth, 5);
-    try builder.add(allocator, .B, .Eigth, 4);
-    try builder.add(allocator, .A, .Quarter, 4);
-    try builder.add(allocator, .A, .Eigth, 4);
-    try builder.add(allocator, .C, .Eigth, 5);
-    try builder.add(allocator, .E, .Quarter, 5);
-    try builder.add(allocator, .D, .Eigth, 5);
-    try builder.add(allocator, .C, .Eigth, 5);
-    try builder.add(allocator, .B, .Quarter, 4);
-    try builder.add(allocator, .B, .Eigth, 4);
-    try builder.add(allocator, .C, .Eigth, 5);
-    try builder.add(allocator, .D, .Quarter, 5);
-    try builder.add(allocator, .E, .Quarter, 5);
-    try builder.add(allocator, .C, .Quarter, 5);
-    try builder.add(allocator, .A, .Whole, 4);
+    try builder.add(allocator, .E, .Quarter, 5, false);
+    try builder.add(allocator, .B, .Eigth, 4, false);
+    try builder.add(allocator, .C, .Eigth, 5, false);
+    try builder.add(allocator, .D, .Quarter, 5, false);
+    try builder.add(allocator, .C, .Eigth, 5, false);
+    try builder.add(allocator, .B, .Eigth, 4, false);
+    try builder.add(allocator, .A, .Quarter, 4, false);
+    try builder.add(allocator, .A, .Eigth, 4, false);
+    try builder.add(allocator, .C, .Eigth, 5, false);
+    try builder.add(allocator, .E, .Quarter, 5, false);
+    try builder.add(allocator, .D, .Eigth, 5, false);
+    try builder.add(allocator, .C, .Eigth, 5, false);
+    try builder.add(allocator, .B, .Quarter, 4, false);
+    try builder.add(allocator, .B, .Eigth, 4, false);
+    try builder.add(allocator, .C, .Eigth, 5, false);
+    try builder.add(allocator, .D, .Quarter, 5, false);
+    try builder.add(allocator, .E, .Quarter, 5, false);
+    try builder.add(allocator, .C, .Quarter, 5, false);
+    try builder.add(allocator, .A, .Half, 4, true);
+    try builder.add(allocator, .A, .Eigth, 4, false);
+    try builder.add(allocator, .D, .Eigth, 5, false);
+    try builder.add(allocator, .F, .Eigth, 5, false);
+    try builder.add(allocator, .A, .Eigth, 5, false);
+    try builder.add(allocator, .A, .Eigth, 5, false);
+    try builder.add(allocator, .G, .Eigth, 5, false);
+    try builder.add(allocator, .F, .Eigth, 5, false);
+    try builder.add(allocator, .E, .Quarter, 5, true);
+    try builder.add(allocator, .C, .Eigth, 5, false);
+    try builder.add(allocator, .E, .Quarter, 5, false);
+    try builder.add(allocator, .D, .Eigth, 5, false);
+    try builder.add(allocator, .C, .Eigth, 5, false);
+    try builder.add(allocator, .B, .Quarter, 4, false);
+    try builder.add(allocator, .B, .Eigth, 4, false);
+    try builder.add(allocator, .C, .Eigth, 5, false);
+    try builder.add(allocator, .D, .Quarter, 5, false);
+    try builder.add(allocator, .E, .Quarter, 5, false);
+    try builder.add(allocator, .C, .Quarter, 5, false);
+    try builder.add(allocator, .A, .Whole, 4, true);
 
     const notes = builder.getNotes().items;
 
