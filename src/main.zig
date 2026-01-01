@@ -1,5 +1,13 @@
 const std = @import("std");
 
+const bpm = 120.0;
+const secs_per_beat = 60.0 / bpm;
+const number_of_channels: u16 = 1;
+const sample_rate: u32 = 44100;
+const bits_per_sample: u16 = 16;
+const bytes_per_bloc: u16 = number_of_channels * bits_per_sample / 8;
+const bytes_per_sec: u32 = sample_rate * bytes_per_bloc;
+
 const frequencies = blk: {
     var freqs: [108]f32 = undefined;
     freqs[0] = 16.35;
@@ -10,49 +18,51 @@ const frequencies = blk: {
     break :blk freqs;
 };
 
-const NoteValue = enum { C, CSharp, DFlat, D, DSharp, EFlat, E, F, FSharp, GFlat, G, GSharp, AFlat, A, ASharp, BFlat, B };
+fn getFrequency(value: NoteValue, octave: u8) f32 {
+    const offset: u8 = switch (value) {
+        .C => 0,
+        .CSharp, .DFlat => 1,
+        .D => 2,
+        .DSharp, .EFlat => 3,
+        .E => 4,
+        .F => 5,
+        .FSharp, .GFlat => 6,
+        .G => 7,
+        .GSharp, .AFlat => 8,
+        .A => 9,
+        .ASharp, .BFlat => 10,
+        .B => 11,
+    };
+    const index = octave * 12 + offset;
+    return frequencies[index];
+}
 
-const Duration = enum { Whole, Half, Quarter, Eigth, Sixteenth, ThirtySecond, SixtyFourth };
+const NoteValue = enum { C, CSharp, DFlat, D, DSharp, EFlat, E, F, FSharp, GFlat, G, GSharp, AFlat, A, ASharp, BFlat, B };
 
 const Note = struct {
     start: f32,
+    end: f32,
+    duration: f32,
     value: NoteValue,
-    duration: Duration = .Quarter,
+    frequency: f32,
     octave: u8,
-    dotted: bool,
 
-    fn getFrequency(self: *Note) f32 {
-        const offset: u8 = switch (self.value) {
-            .C => 0,
-            .CSharp, .DFlat => 1,
-            .D => 2,
-            .DSharp, .EFlat => 3,
-            .E => 4,
-            .F => 5,
-            .FSharp, .GFlat => 6,
-            .G => 7,
-            .GSharp, .AFlat => 8,
-            .A => 9,
-            .ASharp, .BFlat => 10,
-            .B => 11,
+    fn new(start: f32, duration: f32, value: NoteValue, octave: u8) Note {
+        return Note{
+            .start = start,
+            .end = start + duration,
+            .duration = duration,
+            .value = value,
+            .frequency = getFrequency(value, octave),
+            .octave = octave,
         };
-        const index = self.octave * 12 + offset;
-        return frequencies[index];
     }
+};
 
-    fn getBeats(self: @This()) f32 {
-        const factor: f32 = if (self.dotted) 1.5 else 1.0;
-        const val: f32 = switch (self.duration) {
-            .Whole => 4.0,
-            .Half => 2.0,
-            .Quarter => 1.0,
-            .Eigth => 1.0 / 2.0,
-            .Sixteenth => 1.0 / 4.0,
-            .ThirtySecond => 1.0 / 8.0,
-            .SixtyFourth => 1.0 / 16.0,
-        };
-        return val * factor;
-    }
+const PartialNote = struct {
+    value: NoteValue,
+    duration: f32,
+    octave: u8,
 };
 
 const MelodyBuilder = struct {
@@ -70,19 +80,25 @@ const MelodyBuilder = struct {
         self: *MelodyBuilder,
         arena: std.mem.Allocator,
         value: NoteValue,
-        duration: Duration,
+        duration: f32,
         octave: u8,
-        dotted: bool,
     ) !void {
-        const note = Note{
-            .value = value,
-            .duration = duration,
-            .octave = octave,
-            .start = self.position,
-            .dotted = dotted,
-        };
+        const note = Note.new(self.position, duration, value, octave);
         try self.notes.append(arena, note);
-        self.position += note.getBeats();
+        self.position += note.duration;
+    }
+
+    fn addChord(
+        self: *MelodyBuilder,
+        arena: std.mem.Allocator,
+        chord: []const PartialNote,
+    ) !void {
+        if (chord.len == 0) return;
+        for (chord) |*item| {
+            const note = Note.new(self.position, item.duration, item.value, item.octave);
+            try self.notes.append(arena, note);
+        }
+        self.position += chord[0].duration;
     }
 
     fn getNotes(self: *MelodyBuilder) std.ArrayListUnmanaged(Note) {
@@ -99,23 +115,27 @@ pub fn main() !void {
     var file = try std.fs.cwd().createFile("out.wav", .{ .read = true });
     defer file.close();
 
-    const bpm = 120;
-    const bars = 8;
-    const beats = bars * 4;
-    const duration: u32 = std.math.round(@as(f32, @floatFromInt(beats)) / @as(f32, @floatFromInt(bpm)) * 60);
-    const secs_per_beat = @as(f32, @floatFromInt(duration)) / @as(f32, @floatFromInt(beats));
+    const notes = try createNotes(allocator);
+    const beats = notes[notes.len - 1].end;
+    const duration_in_secs = beats / bpm * 60;
+    const data_size: u32 = @intFromFloat(std.math.ceil(duration_in_secs * @as(f32, @floatFromInt(bytes_per_sec))));
+
+    std.debug.print("bpm = {}, beats = {}, duration = {}, data_size = {}\n", .{ bpm, beats, duration_in_secs, data_size });
+
+    const buf: []u8 = try allocator.alloc(u8, data_size);
+    try renderNotes(allocator, buf, notes);
+    try writeWaveFile(buf);
+}
+
+fn writeWaveFile(data: []u8) !void {
+    var file = try std.fs.cwd().createFile("out.wav", .{ .read = true });
+    defer file.close();
 
     const fmt_chunk_size: u32 = 16;
     const audio_format: u16 = 1;
-    const number_of_channels: u16 = 1;
-    const sample_rate: u32 = 44100;
-    const bits_per_sample: u16 = 16;
-    const bytes_per_bloc: u16 = number_of_channels * bits_per_sample / 8;
-    const bytes_per_sec: u32 = sample_rate * bytes_per_bloc;
 
-    const data_size: u32 = duration * bytes_per_sec;
-
-    const file_size: u32 = 12 + 24 + 8 + data_size - 8;
+    const data_len: u32 = @intCast(data.len);
+    const file_size: u32 = 12 + 24 + 8 + data_len - 8;
 
     try writeString(&file, "RIFF");
     try writeInt(u32, &file, file_size);
@@ -131,66 +151,135 @@ pub fn main() !void {
     try writeInt(u16, &file, bits_per_sample);
 
     try writeString(&file, "data");
-    try writeInt(u32, &file, data_size);
+    try writeInt(u32, &file, data_len);
 
-    const number_of_samples = duration * sample_rate;
+    _ = try file.write(data);
+}
 
+fn createNotes(arena: std.mem.Allocator) ![]Note {
     var builder = MelodyBuilder.init();
 
-    try builder.add(allocator, .E, .Quarter, 5, false);
-    try builder.add(allocator, .B, .Eigth, 4, false);
-    try builder.add(allocator, .C, .Eigth, 5, false);
-    try builder.add(allocator, .D, .Quarter, 5, false);
-    try builder.add(allocator, .C, .Eigth, 5, false);
-    try builder.add(allocator, .B, .Eigth, 4, false);
-    try builder.add(allocator, .A, .Quarter, 4, false);
-    try builder.add(allocator, .A, .Eigth, 4, false);
-    try builder.add(allocator, .C, .Eigth, 5, false);
-    try builder.add(allocator, .E, .Quarter, 5, false);
-    try builder.add(allocator, .D, .Eigth, 5, false);
-    try builder.add(allocator, .C, .Eigth, 5, false);
-    try builder.add(allocator, .B, .Quarter, 4, false);
-    try builder.add(allocator, .B, .Eigth, 4, false);
-    try builder.add(allocator, .C, .Eigth, 5, false);
-    try builder.add(allocator, .D, .Quarter, 5, false);
-    try builder.add(allocator, .E, .Quarter, 5, false);
-    try builder.add(allocator, .C, .Quarter, 5, false);
-    try builder.add(allocator, .A, .Half, 4, true);
-    try builder.add(allocator, .A, .Eigth, 4, false);
-    try builder.add(allocator, .D, .Eigth, 5, false);
-    try builder.add(allocator, .F, .Eigth, 5, false);
-    try builder.add(allocator, .A, .Eigth, 5, false);
-    try builder.add(allocator, .A, .Eigth, 5, false);
-    try builder.add(allocator, .G, .Eigth, 5, false);
-    try builder.add(allocator, .F, .Eigth, 5, false);
-    try builder.add(allocator, .E, .Quarter, 5, true);
-    try builder.add(allocator, .C, .Eigth, 5, false);
-    try builder.add(allocator, .E, .Quarter, 5, false);
-    try builder.add(allocator, .D, .Eigth, 5, false);
-    try builder.add(allocator, .C, .Eigth, 5, false);
-    try builder.add(allocator, .B, .Quarter, 4, false);
-    try builder.add(allocator, .B, .Eigth, 4, false);
-    try builder.add(allocator, .C, .Eigth, 5, false);
-    try builder.add(allocator, .D, .Quarter, 5, false);
-    try builder.add(allocator, .E, .Quarter, 5, false);
-    try builder.add(allocator, .C, .Quarter, 5, false);
-    try builder.add(allocator, .A, .Whole, 4, true);
+    try builder.addChord(arena, &.{
+        PartialNote{ .value = .C, .duration = 4, .octave = 5 },
+        PartialNote{ .value = .E, .duration = 4, .octave = 5 },
+        PartialNote{ .value = .G, .duration = 4, .octave = 5 },
+    });
 
-    const notes = builder.getNotes().items;
+    try builder.addChord(arena, &.{
+        PartialNote{ .value = .E, .duration = 4, .octave = 4 },
+        PartialNote{ .value = .GSharp, .duration = 4, .octave = 4 },
+        PartialNote{ .value = .B, .duration = 4, .octave = 4 },
+    });
 
-    var current_note: usize = 0;
+    try builder.addChord(arena, &.{
+        PartialNote{ .value = .A, .duration = 4, .octave = 4 },
+        PartialNote{ .value = .C, .duration = 4, .octave = 5 },
+        PartialNote{ .value = .E, .duration = 4, .octave = 5 },
+    });
 
-    for (0..number_of_samples) |i| {
+    try builder.addChord(arena, &.{
+        PartialNote{ .value = .F, .duration = 4, .octave = 4 },
+        PartialNote{ .value = .GSharp, .duration = 4, .octave = 4 },
+        PartialNote{ .value = .C, .duration = 4, .octave = 5 },
+    });
+
+    // try builder.add(arena, .E, 1, 5);
+    // try builder.add(arena, .B, 0.5, 4);
+    // try builder.add(arena, .C, 0.5, 5);
+    // try builder.add(arena, .D, 1.0, 5);
+    // try builder.add(arena, .C, 0.5, 5);
+    // try builder.add(arena, .B, 0.5, 4);
+    // try builder.add(arena, .A, 1.0, 4);
+    // try builder.add(arena, .A, 0.5, 4);
+    // try builder.add(arena, .C, 0.5, 5);
+    // try builder.add(arena, .E, 1.0, 5);
+    // try builder.add(arena, .D, 0.5, 5);
+    // try builder.add(arena, .C, 0.5, 5);
+    // try builder.add(arena, .B, 1.0, 4);
+    // try builder.add(arena, .B, 0.5, 4);
+    // try builder.add(arena, .C, 0.5, 5);
+    // try builder.add(arena, .D, 1.0, 5);
+    // try builder.add(arena, .E, 1.0, 5);
+    // try builder.add(arena, .C, 1.0, 5);
+    // try builder.add(arena, .A, 3.0, 4);
+    // try builder.add(arena, .A, 0.5, 4);
+    // try builder.add(arena, .D, 0.5, 5);
+    // try builder.add(arena, .F, 0.5, 5);
+    // try builder.add(arena, .A, 0.5, 5);
+    // try builder.add(arena, .A, 0.5, 5);
+    // try builder.add(arena, .G, 0.5, 5);
+    // try builder.add(arena, .F, 0.5, 5);
+    // try builder.add(arena, .E, 1.5, 5);
+    // try builder.add(arena, .C, 0.5, 5);
+    // try builder.add(arena, .E, 1.0, 5);
+    // try builder.add(arena, .D, 0.5, 5);
+    // try builder.add(arena, .C, 0.5, 5);
+    // try builder.add(arena, .B, 1.0, 4);
+    // try builder.add(arena, .B, 0.5, 4);
+    // try builder.add(arena, .C, 0.5, 5);
+    // try builder.add(arena, .D, 1.0, 5);
+    // try builder.add(arena, .E, 1.0, 5);
+    // try builder.add(arena, .C, 1.0, 5);
+    // try builder.add(arena, .A, 6.0, 4);
+
+    const notes = builder.getNotes();
+    std.sort.pdq(Note, notes.items, {}, notesLessThan);
+    return notes.items;
+}
+
+fn notesLessThan(context: void, a: Note, b: Note) bool {
+    _ = context;
+    return a.start < b.start;
+}
+
+fn renderNotes(arena: std.mem.Allocator, buf: []u8, notes: []Note) !void {
+    if (notes.len == 0) return;
+
+    var index: ?usize = null;
+    var current_notes: std.ArrayListUnmanaged(Note) = .{};
+
+    for (0..buf.len / 2) |i| {
         const t: f32 = @as(f32, @floatFromInt(i)) / sample_rate;
         const beat = t / secs_per_beat + 1;
 
-        if (beat >= notes[current_note].start + notes[current_note].getBeats()) {
-            current_note += 1;
+        var new_current_notes: std.ArrayListUnmanaged(Note) = .{};
+        for (current_notes.items) |note| {
+            if (beat < note.end) {
+                try new_current_notes.append(arena, note);
+            }
         }
 
-        const y: f32 = std.math.sin(t * notes[current_note].getFrequency() * 2.0 * std.math.pi);
-        const sample: i16 = @intFromFloat(y * std.math.maxInt(i16));
-        try writeInt(i16, &file, sample);
+        current_notes = new_current_notes;
+
+        var next_index = if (index) |idx| idx + 1 else 0;
+
+        if (next_index < notes.len and beat >= notes[next_index].start) {
+            const start = next_index;
+            while (next_index < notes.len and notes[next_index].start == notes[start].start) {
+                try current_notes.append(arena, notes[next_index]);
+                next_index += 1;
+            }
+
+            index = next_index - 1;
+        }
+
+        var sum: f32 = 0;
+        for (current_notes.items) |*note| {
+            const y: f32 = std.math.sin(t * note.frequency * 2.0 * std.math.pi);
+            sum += y;
+        }
+
+        if (current_notes.items.len > 0) {
+            sum /= @as(f32, @floatFromInt(current_notes.items.len));
+        }
+
+        sum = std.math.clamp(sum, -1.0, 1.0);
+
+        const sample: i16 = @intFromFloat(sum * std.math.maxInt(i16));
+        const raw: u16 = @bitCast(sample);
+        const offset = i * 2;
+        buf[offset] = @truncate(raw);
+        buf[offset + 1] = @truncate(raw >> 8);
     }
 }
 
