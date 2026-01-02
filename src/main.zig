@@ -242,14 +242,15 @@ fn renderNotes(arena: std.mem.Allocator, buf: []u8, notes: []Note) !void {
         const t: f32 = @as(f32, @floatFromInt(i)) / sample_rate;
         const beat = t / secs_per_beat + 1;
 
-        var new_current_notes: std.ArrayListUnmanaged(Note) = .{};
-        for (current_notes.items) |note| {
-            if (beat < note.end) {
-                try new_current_notes.append(arena, note);
+        while (true) {
+            for (current_notes.items, 0..) |*note, j| {
+                if (beat >= note.end) {
+                    _ = current_notes.swapRemove(j);
+                    break;
+                }
             }
+            break;
         }
-
-        current_notes = new_current_notes;
 
         var next_index = if (index) |idx| idx + 1 else 0;
 
