@@ -7,6 +7,7 @@ const sample_rate: u32 = 44100;
 const bits_per_sample: u16 = 16;
 const bytes_per_bloc: u16 = number_of_channels * bits_per_sample / 8;
 const bytes_per_sec: u32 = sample_rate * bytes_per_bloc;
+const fade_time: f32 = 0.005;
 
 const frequencies = blk: {
     var freqs: [108]f32 = undefined;
@@ -17,6 +18,23 @@ const frequencies = blk: {
     }
     break :blk freqs;
 };
+
+pub fn main() !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    const notes = try createNotes(allocator);
+    const duration_in_secs = notes[notes.len - 1].end;
+    const data_size: u32 = @intFromFloat(std.math.ceil(duration_in_secs * @as(f32, @floatFromInt(bytes_per_sec))));
+
+    std.debug.print("bpm = {}, duration = {}, data_size = {}\n", .{ bpm, duration_in_secs, data_size });
+
+    const buf: []u8 = try allocator.alloc(u8, data_size);
+    try renderNotes(allocator, buf, notes);
+    try writeWaveFile(buf);
+}
 
 fn getFrequency(value: NoteValue, octave: u8) f32 {
     const offset: u8 = switch (value) {
@@ -47,10 +65,12 @@ const Note = struct {
     frequency: f32,
     octave: u8,
 
-    fn new(start: f32, duration: f32, value: NoteValue, octave: u8) Note {
+    fn new(start: f32, duration_in_beats: f32, value: NoteValue, octave: u8) Note {
+        const duration = secs_per_beat * duration_in_beats;
+        const end = start + duration;
         return Note{
             .start = start,
-            .end = start + duration,
+            .end = end,
             .duration = duration,
             .value = value,
             .frequency = getFrequency(value, octave),
@@ -67,7 +87,7 @@ const PartialNote = struct {
 
 const MelodyBuilder = struct {
     notes: std.ArrayListUnmanaged(Note),
-    position: f32 = 1,
+    t: f32 = 0,
 
     fn init() @This() {
         const notes: std.ArrayListUnmanaged(Note) = .{};
@@ -83,9 +103,9 @@ const MelodyBuilder = struct {
         duration: f32,
         octave: u8,
     ) !void {
-        const note = Note.new(self.position, duration, value, octave);
+        const note = Note.new(self.t, duration, value, octave);
         try self.notes.append(arena, note);
-        self.position += note.duration;
+        self.t += note.duration;
     }
 
     fn addChord(
@@ -95,37 +115,16 @@ const MelodyBuilder = struct {
     ) !void {
         if (chord.len == 0) return;
         for (chord) |*item| {
-            const note = Note.new(self.position, item.duration, item.value, item.octave);
+            const note = Note.new(self.t, item.duration, item.value, item.octave);
             try self.notes.append(arena, note);
         }
-        self.position += chord[0].duration;
+        self.t += self.notes.items[self.notes.items.len - 1].duration;
     }
 
     fn getNotes(self: *MelodyBuilder) std.ArrayListUnmanaged(Note) {
         return self.notes;
     }
 };
-
-pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-
-    const allocator = arena.allocator();
-
-    var file = try std.fs.cwd().createFile("out.wav", .{ .read = true });
-    defer file.close();
-
-    const notes = try createNotes(allocator);
-    const beats = notes[notes.len - 1].end;
-    const duration_in_secs = beats / bpm * 60;
-    const data_size: u32 = @intFromFloat(std.math.ceil(duration_in_secs * @as(f32, @floatFromInt(bytes_per_sec))));
-
-    std.debug.print("bpm = {}, beats = {}, duration = {}, data_size = {}\n", .{ bpm, beats, duration_in_secs, data_size });
-
-    const buf: []u8 = try allocator.alloc(u8, data_size);
-    try renderNotes(allocator, buf, notes);
-    try writeWaveFile(buf);
-}
 
 fn writeWaveFile(data: []u8) !void {
     var file = try std.fs.cwd().createFile("out.wav", .{ .read = true });
@@ -221,7 +220,7 @@ fn createNotes(arena: std.mem.Allocator) ![]Note {
     // try builder.add(arena, .E, 1.0, 5);
     // try builder.add(arena, .C, 1.0, 5);
     // try builder.add(arena, .A, 6.0, 4);
-
+    //
     const notes = builder.getNotes();
     std.sort.pdq(Note, notes.items, {}, notesLessThan);
     return notes.items;
@@ -240,11 +239,10 @@ fn renderNotes(arena: std.mem.Allocator, buf: []u8, notes: []Note) !void {
 
     for (0..buf.len / 2) |i| {
         const t: f32 = @as(f32, @floatFromInt(i)) / sample_rate;
-        const beat = t / secs_per_beat + 1;
 
         while (true) {
             for (current_notes.items, 0..) |*note, j| {
-                if (beat >= note.end) {
+                if (t >= note.end) {
                     _ = current_notes.swapRemove(j);
                     break;
                 }
@@ -254,7 +252,7 @@ fn renderNotes(arena: std.mem.Allocator, buf: []u8, notes: []Note) !void {
 
         var next_index = if (index) |idx| idx + 1 else 0;
 
-        if (next_index < notes.len and beat >= notes[next_index].start) {
+        if (next_index < notes.len and t >= notes[next_index].start) {
             const start = next_index;
             while (next_index < notes.len and notes[next_index].start == notes[start].start) {
                 try current_notes.append(arena, notes[next_index]);
@@ -266,7 +264,13 @@ fn renderNotes(arena: std.mem.Allocator, buf: []u8, notes: []Note) !void {
 
         var sum: f32 = 0;
         for (current_notes.items) |*note| {
-            const y: f32 = std.math.sin(t * note.frequency * 2.0 * std.math.pi);
+            var envelope: f32 = 1.0;
+            if (t < note.start + fade_time) {
+                envelope = (t - note.start) / fade_time;
+            } else if (t > note.end - fade_time) {
+                envelope = (note.end - t) / fade_time;
+            }
+            const y: f32 = envelope * std.math.sin(t * note.frequency * 2.0 * std.math.pi);
             sum += y;
         }
 
