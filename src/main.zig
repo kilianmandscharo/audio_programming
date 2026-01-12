@@ -64,6 +64,7 @@ const Note = struct {
     value: NoteValue,
     frequency: f32,
     octave: u8,
+    phase: f32 = 0.0,
 
     fn new(start: f32, duration_in_beats: f32, value: NoteValue, octave: u8) Note {
         const duration = secs_per_beat * duration_in_beats;
@@ -220,7 +221,7 @@ fn createNotes(arena: std.mem.Allocator) ![]Note {
     // try builder.add(arena, .E, 1.0, 5);
     // try builder.add(arena, .C, 1.0, 5);
     // try builder.add(arena, .A, 6.0, 4);
-    //
+
     const notes = builder.getNotes();
     std.sort.pdq(Note, notes.items, {}, notesLessThan);
     return notes.items;
@@ -270,7 +271,9 @@ fn renderNotes(arena: std.mem.Allocator, buf: []u8, notes: []Note) !void {
             } else if (t > note.end - fade_time) {
                 envelope = (note.end - t) / fade_time;
             }
-            const y: f32 = envelope * std.math.sin(t * note.frequency * 2.0 * std.math.pi);
+            const y: f32 = envelope * std.math.sin(note.phase);
+            note.phase += 2 * std.math.pi * note.frequency / sample_rate;
+            note.phase = @rem(note.phase, std.math.pi * 2);
             sum += y;
         }
 
