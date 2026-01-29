@@ -19,9 +19,42 @@ const frequencies = blk: {
     break :blk freqs;
 };
 
+const CommandType = enum {
+    NoteOn,
+    NoteOff,
+    Unknown,
+};
+
+const Command = union(CommandType) {
+    NoteOn: struct { key: u8, velocity: u8 },
+    NoteOff: struct { key: u8 },
+    Unknown: struct {},
+};
+
+fn readMidi() !void {
+    const path = "/dev/snd/midiC4D0";
+    const file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
+
+    var buf: [1024]u8 = undefined;
+    var reader = file.reader(&buf);
+
+    var bytes: [4]u8 = undefined;
+    while (true) {
+        _ = try reader.read(&bytes);
+        const command: Command = switch (bytes[0]) {
+            0x90 => Command{ .NoteOn = .{ .key = bytes[1], .velocity = bytes[2] } },
+            0x80 => Command{ .NoteOff = .{ .key = bytes[1] } },
+            else => Command{ .Unknown = .{} },
+        };
+        std.debug.print("{any}\n", .{command});
+    }
+}
+
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
+
+    try readMidi();
 
     const allocator = arena.allocator();
 
@@ -159,68 +192,68 @@ fn writeWaveFile(data: []u8) !void {
 fn createNotes(arena: std.mem.Allocator) ![]Note {
     var builder = MelodyBuilder.init();
 
-    try builder.addChord(arena, &.{
-        PartialNote{ .value = .C, .duration = 4, .octave = 5 },
-        PartialNote{ .value = .E, .duration = 4, .octave = 5 },
-        PartialNote{ .value = .G, .duration = 4, .octave = 5 },
-    });
+    // try builder.addChord(arena, &.{
+    //     PartialNote{ .value = .C, .duration = 4, .octave = 5 },
+    //     PartialNote{ .value = .E, .duration = 4, .octave = 5 },
+    //     PartialNote{ .value = .G, .duration = 4, .octave = 5 },
+    // });
+    //
+    // try builder.addChord(arena, &.{
+    //     PartialNote{ .value = .E, .duration = 4, .octave = 4 },
+    //     PartialNote{ .value = .GSharp, .duration = 4, .octave = 4 },
+    //     PartialNote{ .value = .B, .duration = 4, .octave = 4 },
+    // });
+    //
+    // try builder.addChord(arena, &.{
+    //     PartialNote{ .value = .A, .duration = 4, .octave = 4 },
+    //     PartialNote{ .value = .C, .duration = 4, .octave = 5 },
+    //     PartialNote{ .value = .E, .duration = 4, .octave = 5 },
+    // });
+    //
+    // try builder.addChord(arena, &.{
+    //     PartialNote{ .value = .F, .duration = 4, .octave = 4 },
+    //     PartialNote{ .value = .GSharp, .duration = 4, .octave = 4 },
+    //     PartialNote{ .value = .C, .duration = 4, .octave = 5 },
+    // });
 
-    try builder.addChord(arena, &.{
-        PartialNote{ .value = .E, .duration = 4, .octave = 4 },
-        PartialNote{ .value = .GSharp, .duration = 4, .octave = 4 },
-        PartialNote{ .value = .B, .duration = 4, .octave = 4 },
-    });
-
-    try builder.addChord(arena, &.{
-        PartialNote{ .value = .A, .duration = 4, .octave = 4 },
-        PartialNote{ .value = .C, .duration = 4, .octave = 5 },
-        PartialNote{ .value = .E, .duration = 4, .octave = 5 },
-    });
-
-    try builder.addChord(arena, &.{
-        PartialNote{ .value = .F, .duration = 4, .octave = 4 },
-        PartialNote{ .value = .GSharp, .duration = 4, .octave = 4 },
-        PartialNote{ .value = .C, .duration = 4, .octave = 5 },
-    });
-
-    // try builder.add(arena, .E, 1, 5);
-    // try builder.add(arena, .B, 0.5, 4);
-    // try builder.add(arena, .C, 0.5, 5);
-    // try builder.add(arena, .D, 1.0, 5);
-    // try builder.add(arena, .C, 0.5, 5);
-    // try builder.add(arena, .B, 0.5, 4);
-    // try builder.add(arena, .A, 1.0, 4);
-    // try builder.add(arena, .A, 0.5, 4);
-    // try builder.add(arena, .C, 0.5, 5);
-    // try builder.add(arena, .E, 1.0, 5);
-    // try builder.add(arena, .D, 0.5, 5);
-    // try builder.add(arena, .C, 0.5, 5);
-    // try builder.add(arena, .B, 1.0, 4);
-    // try builder.add(arena, .B, 0.5, 4);
-    // try builder.add(arena, .C, 0.5, 5);
-    // try builder.add(arena, .D, 1.0, 5);
-    // try builder.add(arena, .E, 1.0, 5);
-    // try builder.add(arena, .C, 1.0, 5);
-    // try builder.add(arena, .A, 3.0, 4);
-    // try builder.add(arena, .A, 0.5, 4);
-    // try builder.add(arena, .D, 0.5, 5);
-    // try builder.add(arena, .F, 0.5, 5);
-    // try builder.add(arena, .A, 0.5, 5);
-    // try builder.add(arena, .A, 0.5, 5);
-    // try builder.add(arena, .G, 0.5, 5);
-    // try builder.add(arena, .F, 0.5, 5);
-    // try builder.add(arena, .E, 1.5, 5);
-    // try builder.add(arena, .C, 0.5, 5);
-    // try builder.add(arena, .E, 1.0, 5);
-    // try builder.add(arena, .D, 0.5, 5);
-    // try builder.add(arena, .C, 0.5, 5);
-    // try builder.add(arena, .B, 1.0, 4);
-    // try builder.add(arena, .B, 0.5, 4);
-    // try builder.add(arena, .C, 0.5, 5);
-    // try builder.add(arena, .D, 1.0, 5);
-    // try builder.add(arena, .E, 1.0, 5);
-    // try builder.add(arena, .C, 1.0, 5);
-    // try builder.add(arena, .A, 6.0, 4);
+    try builder.add(arena, .E, 1, 5);
+    try builder.add(arena, .B, 0.5, 4);
+    try builder.add(arena, .C, 0.5, 5);
+    try builder.add(arena, .D, 1.0, 5);
+    try builder.add(arena, .C, 0.5, 5);
+    try builder.add(arena, .B, 0.5, 4);
+    try builder.add(arena, .A, 1.0, 4);
+    try builder.add(arena, .A, 0.5, 4);
+    try builder.add(arena, .C, 0.5, 5);
+    try builder.add(arena, .E, 1.0, 5);
+    try builder.add(arena, .D, 0.5, 5);
+    try builder.add(arena, .C, 0.5, 5);
+    try builder.add(arena, .B, 1.0, 4);
+    try builder.add(arena, .B, 0.5, 4);
+    try builder.add(arena, .C, 0.5, 5);
+    try builder.add(arena, .D, 1.0, 5);
+    try builder.add(arena, .E, 1.0, 5);
+    try builder.add(arena, .C, 1.0, 5);
+    try builder.add(arena, .A, 3.0, 4);
+    try builder.add(arena, .A, 0.5, 4);
+    try builder.add(arena, .D, 0.5, 5);
+    try builder.add(arena, .F, 0.5, 5);
+    try builder.add(arena, .A, 0.5, 5);
+    try builder.add(arena, .A, 0.5, 5);
+    try builder.add(arena, .G, 0.5, 5);
+    try builder.add(arena, .F, 0.5, 5);
+    try builder.add(arena, .E, 1.5, 5);
+    try builder.add(arena, .C, 0.5, 5);
+    try builder.add(arena, .E, 1.0, 5);
+    try builder.add(arena, .D, 0.5, 5);
+    try builder.add(arena, .C, 0.5, 5);
+    try builder.add(arena, .B, 1.0, 4);
+    try builder.add(arena, .B, 0.5, 4);
+    try builder.add(arena, .C, 0.5, 5);
+    try builder.add(arena, .D, 1.0, 5);
+    try builder.add(arena, .E, 1.0, 5);
+    try builder.add(arena, .C, 1.0, 5);
+    try builder.add(arena, .A, 6.0, 4);
 
     const notes = builder.getNotes();
     std.sort.pdq(Note, notes.items, {}, notesLessThan);
